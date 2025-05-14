@@ -172,3 +172,14 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+checkpoints/
+data/
+util/
+profiler_log/
+
+sbatch_scripts/logs
+sbatch_scripts/profiler_log
+
+*.csv
+*.svg
