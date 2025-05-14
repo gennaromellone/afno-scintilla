@@ -1,0 +1,11 @@
+tqdm
+torch
+torchvision
+scikit-learn
+PyYAML
+xarray
+netcdf4
+zarr
+dask
+
+nvidia-physicsnemo

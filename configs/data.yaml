@@ -1,0 +1,32 @@
+# Configuration file
+obs_dir: "/storage/external_01/scintilla/EEA_DATA"  # Must contain PM10_hour.csv, PM25_hour.csv, ecc.
+camx_dir: "/storage/external_01/scintilla/CAMx/DATA/" 
+
+interpolated_observation_path: /storage/external_01/scintilla/processed_afno/obs_interpolated_2017.npz
+training_simulated_path: /storage/external_01/scintilla/processed_afno/training_2017.zarr # CAMx dataset
+training_checkpoints_dir: /storage/external_01/scintilla/processed_afno/tmp_chunks
+
+input_vars:
+- PM10
+output_vars:
+- PM10
+
+species_vars:
+  PM10_extra:
+  - CPRM
+  - CCRS
+  PM25:
+  - PSO4
+  - PNO3
+  - PNH4
+  - NA
+  - PCL
+  - PEC
+  - FPRM
+  - POA
+  - SOA1
+  - SOA2
+  - SOA3
+  - SOA4
+  - SOPA
+  - SOPB

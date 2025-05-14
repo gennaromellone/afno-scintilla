@@ -1,0 +1,13 @@
+depth: 8
+embed_dim: 256
+
+grid: grd01                     # or grd02
+img_shape:
+- 362
+- 284
+num_blocks: 8
+patch_size:
+- 2
+- 2
+time_window: 6
+forecast_horizon: 1
