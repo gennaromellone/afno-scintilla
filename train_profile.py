@@ -101,18 +101,18 @@ def main():
     train_set, val_set = random_split(dataset, [train_size, val_size])
     logger.info(f"Loading Dataloader ...")
 
-    #train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True, prefetch_factor=PREFETCH, timeout=0)
-    train_loader = DataLoader(
-        train_set,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=NUM_WORKERS,
-        pin_memory=True,
-        prefetch_factor=PREFETCH,
-        persistent_workers=True,
-        #timeout=120,
-        drop_last=True
-    )
+    train_loader = DataLoader(train_set, batch_size=1, shuffle=True, num_workers=0, pin_memory=False, prefetch_factor=None, timeout=0)
+    #train_loader = DataLoader(
+    #    train_set,
+    #    batch_size=BATCH_SIZE,
+    #    shuffle=False,
+    #    num_workers=NUM_WORKERS,
+    #    pin_memory=True,
+    #    prefetch_factor=PREFETCH,
+    #    persistent_workers=True,
+    #    timeout=120,
+    #    drop_last=True
+    #)
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True, prefetch_factor=PREFETCH, timeout=0)
     #logger.info(f"Start Warmup ...")
     #t0 = time.time()

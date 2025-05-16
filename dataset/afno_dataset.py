@@ -49,7 +49,6 @@ class AFNOZarrObsDatasetOptimized(Dataset):
 
         self.is_pm10_mode = ("PM10" in input_vars)
         self.is_pm25_mode = ("PM25" in input_vars)
-        
 
 
         print(f"AFNO Zarr+Obs Optimized Dataset ready: {len(self.pairs)} matched samples")
@@ -88,63 +87,44 @@ class AFNOZarrObsDatasetOptimized(Dataset):
         return expanded
 
     def process_input(self, input_raw):
-        # input_raw: [TW, C, H, W]
-        TW, C, H, W = input_raw.shape
-
         if self.is_pm10_mode:
-            indices = [self.expanded_vars.index(var)
-                    for var in self.species_vars["PM25"] + self.species_vars["PM10_extra"]
-                    if var in self.expanded_vars]
-            pm10 = input_raw[:, indices].sum(axis=1)  # [TW, H, W]
-            return pm10
+            pm10 = self.compute_pm(input_raw, self.species_vars["PM25"] + self.species_vars["PM10_extra"])
+            return np.expand_dims(pm10, axis=0)  # shape [1, H, W]
 
         elif self.is_pm25_mode:
-            indices = [self.expanded_vars.index(var)
-                    for var in self.species_vars["PM25"]
-                    if var in self.expanded_vars]
-            pm25 = input_raw[:, indices].sum(axis=1)  # [TW, H, W]
-            return pm25
+            pm25 = self.compute_pm(input_raw, self.species_vars["PM25"])
+            return np.expand_dims(pm25, axis=0)  # shape [1, H, W]
 
         else:
-            # Keep selected input vars from expanded list
-            indices = [self.expanded_vars.index(var) for var in self.input_vars]
-            selected = input_raw[:, indices]  # [TW, len(input_vars), H, W]
-            return selected.reshape(-1, H, W)  # → [TW*C, H, W]
-
-
-    
+            out_vars = []
+            for var in self.input_vars:
+                try:
+                    idx = self.expanded_vars.index(var)
+                    out_vars.append(input_raw[idx])
+                except ValueError:
+                    raise ValueError(f"Variabile {var} non trovata in expanded_vars.")
+            return np.stack(out_vars)
+    '''
         
     def __getitem__(self, idx):
         sim_idx, obs_idx = self.pairs[idx + self.start_idx]
 
-        input_raw = self.input[sim_idx].values  # [TW*C, H, W] o [TW*C, W, H]
-        total_channels, D1, D2 = input_raw.shape
+        arr = self.input[sim_idx].data           # può essere dask.Array
+        if isinstance(arr, da.Array):            # ⇢ converto → NumPy
+            arr = arr.compute()                  # blocca il chunk in RAM
 
-        # Swap axes if needed
-        if D1 == 284 and D2 == 362:
-            input_raw = input_raw.transpose(0, 2, 1)
+        T = len(self.input_vars)
+        arr = arr.reshape(-1, T, *arr.shape[-2:])  # [TW, T, H, W]
+        arr = self.process_input(arr)              # vectorizzato!
 
-        H, W = input_raw.shape[1:]
-        if (H, W) != (362, 284):
-            raise ValueError(f"❌ Expected shape (362, 284), got ({H}, {W})")
-
-        num_vars = len(self.expanded_vars)
-        TW = total_channels // num_vars
-        if TW * num_vars != total_channels:
-            raise ValueError("TW × #vars mismatch with total input channels")
-
-        input_raw = input_raw.reshape(TW, num_vars, H, W)  # [TW, C, H, W]
-        processed = self.process_input(input_raw)           # handles PM10/PM25 or expanded
-
-        x = torch.from_numpy(processed).float()
-        y = torch.from_numpy(self.obs_target[obs_idx]).float()
+        x = torch.as_tensor(arr, dtype=torch.float32) \
+                .contiguous(memory_format=torch.channels_last)
+        y = torch.as_tensor(self.obs_target[obs_idx], dtype=torch.float32)
         return x, y
-
-
     '''
     def __getitem__(self, idx):
         #start = time.time()
-        #print(f"Fetching idx {idx}")
+        print(f"Fetching idx {idx}")
         sim_idx, obs_idx = self.pairs[idx + self.start_idx]
         
         input_raw = self.input[sim_idx].values  # [T*V, H, W]
@@ -167,4 +147,4 @@ class AFNOZarrObsDatasetOptimized(Dataset):
             torch.from_numpy(target).float()
         )
 
-    '''
+    #'''

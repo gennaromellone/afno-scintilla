@@ -1,30 +1,25 @@
-from torch.utils.data import DataLoader
-import yaml
-import numpy as np
-import torch
-import os
-import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import xarray as xr
 
-from my_dataset.afno_dataset import AFNOZarrObsDatasetOptimized
+def inspect_zarr(zarr_path):
+    print(f"🔍 Loading Zarr dataset from: {zarr_path}")
+    
+    ds = xr.open_zarr(zarr_path, chunks=None)
 
-with open("preprocess/config_vars.yaml") as f:
-    cfg = yaml.safe_load(f)
+    if "target" not in ds:
+        print("❌ 'target' variable not found in the dataset!")
+        return
 
-dataset = AFNOZarrObsDatasetOptimized(
-    sim_zarr_path="data/processed/out.zarr",
-    obs_npz_path="data/processed/afno_obs_interpolated.npz",
-    input_vars=cfg["input_vars"],
-    output_vars=cfg["output_vars"],
-    species_vars=cfg["species_vars"]
-)
+    target_shape = ds["target"].shape  # (N, C, H, W)
 
-print("Totale samples:", len(dataset))
+    if len(target_shape) != 4:
+        print(f"❌ Unexpected target shape: {target_shape}")
+        return
 
-x, y = dataset[0]
+    out_channels = target_shape[1]
+    print(f"✅ Detected target shape: {target_shape}")
+    print(f"🎯 Number of output channels (out_channels): {out_channels}")
 
-print("Input shape:", x.shape)
-print("Target shape:", y.shape)
-
-print("Input mean:", torch.nanmean(x).item())
-print("Target mean:", torch.nanmean(y).item())
+if __name__ == "__main__":
+    # 🔁 Inserisci qui il percorso corretto
+    zarr_path = "/storage/external_01/scintilla/processed_afno/training_2017.zarr"
+    inspect_zarr(zarr_path)
