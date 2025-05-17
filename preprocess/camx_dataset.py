@@ -6,6 +6,7 @@ from tqdm import tqdm
 from joblib import Parallel, delayed
 import logging
 from datetime import datetime, timedelta
+import argparse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
@@ -34,6 +35,13 @@ dataset_info = {
     "time_window": model_cfg["time_window"],
     "forecast_horizon": model_cfg["forecast_horizon"]
 }
+
+scaling_stats = {
+    "input": {"mean": None, "std": None},
+    "target": {"mean": None, "std": None}
+}
+
+all_inputs, all_targets = [], []
 
 def expand_vars(var_list, species_vars, expand_pm10=True):
     new_vars = []
@@ -67,7 +75,7 @@ def compute_pm10(target_frame, expanded_output_vars, species_vars):
     indices = [i for i, var in enumerate(expanded_output_vars) if var in pm10_species]
     return target_frame[indices].sum(axis=0, keepdims=True)
 
-def process_file(index, files, camx_dir, input_vars_raw, output_vars, time_window, forecast_horizon, start_sample_idx, single_target_pm10, expanded_output_vars, species_vars):
+def process_file(index, files, camx_dir, input_vars_raw, output_vars, time_window, forecast_horizon, start_sample_idx, single_target_pm10, expanded_output_vars, species_vars, normalize):
     fname = files[index]
     date_str = fname.split("_")[1][:8]
     ds_path = os.path.join(camx_dir, fname)
@@ -115,6 +123,10 @@ def process_file(index, files, camx_dir, input_vars_raw, output_vars, time_windo
         if single_target_pm10:
             target_frame = compute_pm10(target_frame, expanded_output_vars, species_vars)
 
+        if normalize:
+            all_inputs.append(input_reshaped)
+            all_targets.append(target_frame)
+
         timestamp = (base_time + timedelta(hours=target_time)).strftime("%Y%m%dT%H")
         out_fname = os.path.join(out_dir, f"simulated_{start_sample_idx + sample_idx:06d}.npz")
         np.savez_compressed(out_fname, input=input_reshaped.astype(np.float32), target=target_frame.astype(np.float32), timestamp=timestamp)
@@ -129,7 +141,7 @@ def process_file(index, files, camx_dir, input_vars_raw, output_vars, time_windo
     logger.info(f"✅ {date_str} → saved {sample_idx} samples")
     return sample_idx
 
-def build_all_npz():
+def build_all_npz(normalize):
     camx_dir = data_cfg["camx_dir"]
     input_vars_raw = data_cfg["input_vars"]
     output_vars_raw = data_cfg["output_vars"]
@@ -156,7 +168,8 @@ def build_all_npz():
             sample_idx,
             single_target_pm10,
             output_vars_expanded,
-            data_cfg["species_vars"]
+            data_cfg["species_vars"],
+            normalize
         )
         sample_counter[0] += result
         return result
@@ -172,5 +185,25 @@ def build_all_npz():
 
     logger.info(f"📍 Saved dataset info to {info_file}")
 
+    # === Save normalization statistics ===
+    if normalize and all_inputs and all_targets:
+        all_inputs_np = np.stack(all_inputs)
+        all_targets_np = np.stack(all_targets)
+
+        scaling_stats["input"]["mean"] = float(np.mean(all_inputs_np))
+        scaling_stats["input"]["std"] = float(np.std(all_inputs_np))
+        scaling_stats["target"]["mean"] = float(np.mean(all_targets_np))
+        scaling_stats["target"]["std"] = float(np.std(all_targets_np))
+
+        norm_file = data_cfg['normalization_file']
+        with open(norm_file, "w") as f:
+            yaml.dump(scaling_stats, f)
+
+        logger.info(f"📦 Saved normalization stats to {norm_file}")
+
 if __name__ == "__main__":
-    build_all_npz()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--normalize", action="store_true", help="Apply normalization to input and target")
+    args = parser.parse_args()
+
+    build_all_npz(normalize=args.normalize)

@@ -4,6 +4,7 @@ camx_dir: "/storage/external_01/scintilla/CAMx/DATA/"
 
 interpolated_observation_path: /storage/external_01/scintilla/processed_afno/training_2017/obs
 training_simulated_path: /storage/external_01/scintilla/processed_afno/training_2017/sim # CAMx dataset
+normalization_file: /storage/external_01/scintilla/processed_afno/training_2017/normalization_stats.yaml
 
 input_vars:
 - PM10

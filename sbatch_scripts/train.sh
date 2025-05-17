@@ -18,4 +18,4 @@ source "${CURR_DIR}/venv/bin/activate"
 nvidia-smi
 
 # Lancia training
-python "${CURR_DIR}/train_profile.py"
+python "${CURR_DIR}/train_afno.py"
