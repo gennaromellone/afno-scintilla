@@ -1,0 +1,8 @@
+num_samples: 8390
+input_shape: (6, 362, 284)
+target_shape: (1, 362, 284)
+input_vars: ['PM10']
+target_vars: ['PM10']
+grid_size: (362, 284)
+time_window: 6
+forecast_horizon: 1

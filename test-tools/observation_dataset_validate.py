@@ -2,105 +2,116 @@ import os
 import numpy as np
 import yaml
 import argparse
+from tqdm import tqdm
+import logging
 
-# === Parse arguments ===
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger(__name__)
+
+# === Args ===
 parser = argparse.ArgumentParser()
-parser.add_argument("--autoclean", action="store_true", help="Automatically delete files with 100% NaNs")
+parser.add_argument("--cleanall", action="store_true", help="Delete all files with 100% NaN content or timestamp mismatch")
 args = parser.parse_args()
 
-# === Load config ===
+# === Config ===
 base_path = "/home/gmellone/afno-scintilla/configs"
-data_config_path = os.path.join(base_path, "data.yaml")
-with open(data_config_path) as f:
-    data_cfg = yaml.safe_load(f)
+config_path = os.path.join(base_path, "config.yaml")
 
-obs_npz_dir = data_cfg["interpolated_observation_path"]
-sim_npz_dir = data_cfg["training_simulated_path"]
+with open(config_path) as f:
+    cfg = yaml.safe_load(f)
 
-obs_files = sorted(f for f in os.listdir(obs_npz_dir) if f.endswith(".npz") and f.startswith("obs_"))
-sim_files = sorted(f for f in os.listdir(sim_npz_dir) if f.endswith(".npz") and f.startswith("simulated_"))
-print(f"🔍 Found {len(obs_files)} observation files")
-print(f"🔍 Found {len(sim_files)} simulated files")
+data_cfg = cfg['data']
+obs_dir = data_cfg["interpolated_observation_path"]
+sim_dir = data_cfg["training_simulated_path"]
+norm_file = data_cfg.get("normalization_file")
 
-errors = 0
-nan_warnings = 0
-shapes = set()
-obs_timestamps = set()
+# === Load file maps by timestamp ===
+def build_timestamp_map(directory, prefix):
+    mapping = {}
+    for f in os.listdir(directory):
+        if f.startswith(prefix) and f.endswith(".npz"):
+            path = os.path.join(directory, f)
+            try:
+                with np.load(path) as data:
+                    ts = data["timestamp"].item()
+                    mapping[ts] = f
+            except Exception as e:
+                logger.error(f"❌ Failed to read timestamp from {f}: {e}")
+    return mapping
 
-deleted_files = 0
+logger.info("🔍 Building timestamp maps for simulated and observed data")
+sim_map = build_timestamp_map(sim_dir, "simulated_")
+obs_map = build_timestamp_map(obs_dir, "obs_")
 
-for fname in obs_files:
-    path = os.path.join(obs_npz_dir, fname)
+common_ts = sorted(set(sim_map.keys()) & set(obs_map.keys()))
+logger.info(f"🔍 Found {len(sim_map)} simulated files")
+logger.info(f"🔍 Found {len(obs_map)} observation files")
+logger.info(f"🔗 Matched {len(common_ts)} timestamp-aligned pairs")
+
+bad_files = []
+mismatched_ts = []
+sample_shapes = []
+
+for ts in tqdm(common_ts):
+    sim_file = sim_map[ts]
+    obs_file = obs_map[ts]
+
+    sim_path = os.path.join(sim_dir, sim_file)
+    obs_path = os.path.join(obs_dir, obs_file)
+
     try:
-        data = np.load(path)
-        obs = data['obs']
-        ts = data['timestamp']
-        if isinstance(ts, np.ndarray):
-            ts = ts.item()
-        obs_timestamps.add(str(ts))
+        sim_npz = np.load(sim_path)
+        obs_npz = np.load(obs_path)
 
-        shapes.add(obs.shape)
+        sim_data = sim_npz["target"]
+        obs_data = obs_npz["obs"] if "obs" in obs_npz else obs_npz["target"]
+        ts_sim = sim_npz["timestamp"]
+        ts_obs = obs_npz["timestamp"]
 
-        nan_ratio = np.isnan(obs).mean()
-        if nan_ratio > 0.2:
-            print(f"⚠️  High NaN ratio in {fname} ({nan_ratio:.1%})")
-            nan_warnings += 1
-
-        if args.autoclean and nan_ratio == 1.0:
-            os.remove(path)
-            sim_path = os.path.join(sim_npz_dir, fname.replace("obs_", "simulated_"))
-            if os.path.exists(sim_path):
+        if ts_sim != ts_obs:
+            logger.warning(f"⏱️  Timestamp mismatch: {sim_file} vs {obs_file} → {ts_sim} ≠ {ts_obs}")
+            mismatched_ts.append((sim_file, obs_file))
+            if args.cleanall:
                 os.remove(sim_path)
-            print(f"🧹 Deleted {fname} and matching simulation file")
-            deleted_files += 1
+                os.remove(obs_path)
+                logger.info(f"🗑️  Removed mismatched files: {sim_file}, {obs_file}")
+            continue
+
+        if np.isnan(obs_data).any():
+            nan_ratio = (np.isnan(obs_data).sum() / obs_data.size) * 100
+            if nan_ratio == 100.0:
+                logger.warning(f"⚠️  High NaN ratio in {obs_file} ({nan_ratio:.1f}%)")
+                bad_files.append(obs_file)
+                if args.cleanall:
+                    os.remove(obs_path)
+                    os.remove(sim_path)
+                    logger.info(f"🗑️  Removed NaN files: {obs_file}, {sim_file}")
+
+        sample_shapes.append(obs_data.shape)
 
     except Exception as e:
-        print(f"❌ Error reading {fname}: {e}")
-        errors += 1
+        logger.error(f"❌ Error reading pair {sim_file}, {obs_file}: {e}")
 
-print(f"✅ Unique shapes: {shapes}")
-print(f"✅ Total obs timestamps: {len(obs_timestamps)}")
-print(f"⚠️  Files with high NaNs: {nan_warnings}")
-print(f"❌ Total read errors: {errors}")
-if args.autoclean:
-    print(f"🧹 Deleted files with 100% NaNs: {deleted_files}")
+logger.info(f"✅ Validation complete: {len(common_ts) - len(bad_files) - len(mismatched_ts)} OK, {len(bad_files)} NaN, {len(mismatched_ts)} timestamp mismatches")
 
-# === Check normalization file consistency ===
-norm_path = os.path.join(data_cfg["training_simulated_path"], "normalization_stats.yaml")
-if os.path.exists(norm_path):
-    with open(norm_path) as f:
+# === Normalization stats for observations (PM10 only) ===
+if norm_file and os.path.exists(norm_file):
+    logger.info(f"📦 Validating normalization file: {norm_file}")
+    with open(norm_file) as f:
         norm_stats = yaml.safe_load(f)
 
-    mean = norm_stats["target"].get("mean")
-    std = norm_stats["target"].get("std")
-    print("\n📊 Normalization stats from simulation:")
-    print(f"  mean = {mean}, std = {std}")
-    if std == 0:
-        print("❌ Invalid normalization: std = 0")
+    section = "target"
+    key = "PM10"
+    if section not in norm_stats:
+        logger.error(f"❌ Missing '{section}' section in normalization file")
+    elif key not in norm_stats[section]:
+        logger.error(f"❌ Missing '{key}' in normalization file under '{section}'")
     else:
-        print("✅ Normalization looks valid")
+        mean = norm_stats[section][key].get("mean")
+        std = norm_stats[section][key].get("std")
+        if std is None or std == 0:
+            logger.error(f"❌ Invalid std for {section}:{key} → {std}")
+        else:
+            logger.info(f"✅ {section}:{key} → mean={mean:.2f}, std={std:.2f}")
 else:
-    print("⚠️  Normalization file not found")
-
-# === Compare with simulation timestamps ===
-sim_timestamps = set()
-for f in sim_files:
-    try:
-        data = np.load(os.path.join(sim_npz_dir, f))
-        ts = data['timestamp']
-        if isinstance(ts, np.ndarray):
-            ts = ts.item()
-        sim_timestamps.add(str(ts))
-    except Exception as e:
-        print(f"❌ Error reading simulated file {f}: {e}")
-
-missing_in_obs = sim_timestamps - obs_timestamps
-missing_in_sim = obs_timestamps - sim_timestamps
-
-if not missing_in_obs and not missing_in_sim:
-    print("✅ Timestamps match exactly between observations and simulations")
-else:
-    if missing_in_obs:
-        print(f"❌ {len(missing_in_obs)} timestamps missing in obs (e.g. {list(missing_in_obs)[:5]})")
-    if missing_in_sim:
-        print(f"❌ {len(missing_in_sim)} timestamps missing in sim (e.g. {list(missing_in_sim)[:5]})")
+    logger.warning("⚠️  Normalization file not found or not specified")

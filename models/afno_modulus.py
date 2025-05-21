@@ -9,7 +9,6 @@ from tqdm import tqdm
 from physicsnemo.models.afno import AFNO
 from torch.utils.data import Dataset, DataLoader, random_split
 
-
 # Model AFNO
 class AFNOModel(nn.Module):
     def __init__(self, img_shape, in_channels, out_channels=1,
@@ -39,39 +38,38 @@ class AFNODataset(Dataset):
         self.obs_dir = obs_dir
         self.time_window = time_window
 
-        self.sim_files = sorted(f for f in os.listdir(sim_dir) if f.endswith(".npz"))
-        self.obs_files = sorted(f for f in os.listdir(obs_dir) if f.endswith(".npz"))
+        self.sim_map = self._build_map(sim_dir, prefix="simulated_")
+        self.obs_map = self._build_map(obs_dir, prefix="obs_")
 
-        assert len(self.sim_files) == len(self.obs_files), "Mismatch between simulation and observation files"
+        self.timestamps = sorted(list(set(self.sim_map.keys()) & set(self.obs_map.keys())))
+
+        if not self.timestamps:
+            raise RuntimeError("No aligned simulation and observation timestamps found.")
 
         self.input_shape = None
         self.target_shape = None
 
-        # === Load normalization stats ===
-        self.norm_input = False
-        self.norm_target = False
+        print("[INFO] Data assumed to be pre-normalized. Skipping normalization during loading.")
 
-        if norm_file is not None and os.path.exists(norm_file):
-            print("Using Normalization File!")
-            with open(norm_file) as f:
-                stats = yaml.safe_load(f)
+    def _build_map(self, directory, prefix):
+        mapping = {}
+        for f in os.listdir(directory):
+            if f.startswith(prefix) and f.endswith(".npz"):
+                try:
+                    data = np.load(os.path.join(directory, f))
+                    ts = data["timestamp"].item()
+                    mapping[ts] = f
+                except Exception:
+                    continue
+        return mapping
 
-            self.input_mean = stats["input"]["mean"]
-            self.input_std = stats["input"]["std"]
-            self.target_mean = stats["target"]["mean"]
-            self.target_std = stats["target"]["std"]
-
-            self.norm_input = True
-            self.norm_target = True
-        else:
-            print("Not using Normalization File!")
-            
     def __len__(self):
-        return len(self.sim_files)
+        return len(self.timestamps)
 
     def __getitem__(self, idx):
-        sim_path = os.path.join(self.sim_dir, self.sim_files[idx])
-        obs_path = os.path.join(self.obs_dir, self.obs_files[idx])
+        ts = self.timestamps[idx]
+        sim_path = os.path.join(self.sim_dir, self.sim_map[ts])
+        obs_path = os.path.join(self.obs_dir, self.obs_map[ts])
 
         sim_data = np.load(sim_path)
         obs_data = np.load(obs_path)
@@ -80,25 +78,21 @@ class AFNODataset(Dataset):
         target_sim = sim_data["target"].astype(np.float32)
         target_obs = obs_data["obs"].astype(np.float32)
 
-        if self.norm_input:
-            input = (input - self.input_mean) / self.input_std
-
-        if self.norm_target:
-            target_sim = (target_sim - self.target_mean) / self.target_std
-            target_obs = (target_obs - self.target_mean) / self.target_std
-
         if self.input_shape is None:
             self.input_shape = input.shape
             self.target_shape = target_sim.shape
+            print(f"[DEBUG] Sample input mean: {input.mean():.4f}, std: {input.std():.4f}")
+            print(f"[DEBUG] Sample target_sim mean: {target_sim.mean():.4f}, std: {target_sim.std():.4f}")
+            print(f"[DEBUG] Sample target_obs mean: {target_obs.mean():.4f}, std: {target_obs.std():.4f}")
 
         return {
             "input": torch.from_numpy(input),
             "target_sim": torch.from_numpy(target_sim),
             "target_obs": torch.from_numpy(target_obs),
+            "timestamp": ts
         }
 
-    
-# Training and Validation AFNO
+# Training and Validation AFNO
 class AFNOTrainer:
     def __init__(self, config_path):
         with open(config_path) as f:
@@ -109,9 +103,9 @@ class AFNOTrainer:
 
         # === Dataset ===
         full_dataset = AFNODataset(
-            sim_dir=cfg["data"]["simulated_dir"],
-            obs_dir=cfg["data"]["obs_dir"],
-            norm_file=cfg["data"]["normalization_file"],
+            sim_dir=cfg["data"]["training_simulated_path"],
+            obs_dir=cfg["data"]["interpolated_observation_path"],
+            norm_file=cfg["data"].get("normalization_file"),
             time_window=cfg["model"]["time_window"]
         )
         if full_dataset.input_shape is None or full_dataset.target_shape is None:
@@ -151,7 +145,7 @@ class AFNOTrainer:
         self.beta = cfg["training"].get("beta", 1.0)
         self.early_stopping_patience = cfg["training"].get("early_stopping", 10)
 
-        self.experiment_folder = cfg["training"].get("experiment_folder", "eperiment01")
+        self.experiment_folder = cfg["training"].get("experiment_folder", "experiment01")
         if not os.path.exists(self.experiment_folder):
             print("Creating dir:", self.experiment_folder)
             os.makedirs(self.experiment_folder)

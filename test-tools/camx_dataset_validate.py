@@ -1,108 +1,74 @@
 import os
 import numpy as np
 import yaml
+import argparse
+from tqdm import tqdm
+import logging
 
-def load_config():
-    base_path = "/home/gmellone/afno-scintilla/configs"
-    data_config_path = os.path.join(base_path, "data.yaml")
-    with open(data_config_path) as f:
-        data_cfg = yaml.safe_load(f)
-    return data_cfg["training_simulated_path"], data_cfg['normalization_file']
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger(__name__)
 
-def validate_npz_files(npz_dir):
-    files = sorted(f for f in os.listdir(npz_dir) if f.endswith(".npz") and f.startswith("simulated_"))
-    if not files:
-        print("❌ No .npz files found in directory.")
-        return
+# === Config ===
+base_path = "/home/gmellone/afno-scintilla/configs"
+config_path = os.path.join(base_path, "config.yaml")
 
-    print(f"🔍 Found {len(files)} simulated .npz files")
+with open(config_path) as f:
+    cfg = yaml.safe_load(f)
 
-    input_shapes = []
-    target_shapes = []
-    timestamps = set()
-    errors = 0
+data_cfg = cfg['data']
+sim_dir = data_cfg["training_simulated_path"]
+norm_file = data_cfg.get("normalization_file")
 
-    for f in files:
-        try:
-            data = np.load(os.path.join(npz_dir, f))
-            input_arr = data['input']
-            target_arr = data['target']
-            ts = data['timestamp']
+# === Validation ===
+logger.info(f"🔍 Validating simulated .npz files in: {sim_dir}")
+files = sorted([f for f in os.listdir(sim_dir) if f.startswith("simulated_") and f.endswith(".npz")])
 
-            input_shapes.append(input_arr.shape)
-            target_shapes.append(target_arr.shape)
+if not files:
+    logger.error("❌ No .npz simulation files found.")
+    exit(1)
 
-            if isinstance(ts, np.ndarray):
-                ts = ts.item()  # safely extract scalar from array
-            timestamps.add(str(ts))
+logger.info(f"🔍 Found {len(files)} simulated .npz files")
 
-            if np.isnan(input_arr).any():
-                print(f"⚠️  NaNs found in input of {f}")
-            if np.isnan(target_arr).any():
-                print(f"⚠️  NaNs found in target of {f}")
+bad_files = []
+sample_shapes = []
 
-        except Exception as e:
-            print(f"❌ Error reading {f}: {e}")
-            errors += 1
+for f in tqdm(files):
+    try:
+        data = np.load(os.path.join(sim_dir, f))
+        input_data = data["input"]
+        target_data = data["target"]
+        ts = data["timestamp"]
 
-    unique_input_shapes = set(input_shapes)
-    unique_target_shapes = set(target_shapes)
+        if np.isnan(input_data).any() or np.isnan(target_data).any():
+            nan_ratio = (np.isnan(target_data).sum() / target_data.size) * 100
+            if nan_ratio == 100.0:
+                logger.warning(f"⚠️  High NaN ratio in {f} ({nan_ratio:.1f}%)")
+            bad_files.append(f)
 
-    print(f"✅ Unique input shapes: {unique_input_shapes}")
-    print(f"✅ Unique target shapes: {unique_target_shapes}")
-    print(f"✅ Total unique timestamps: {len(timestamps)}")
-    print(f"✅ Completed with {errors} error(s)")
+        sample_shapes.append((input_data.shape, target_data.shape))
 
-    # Compare with dataset_info.txt
-    info_path = os.path.join(npz_dir, "dataset_info.txt")
-    if os.path.exists(info_path):
-        print("\n📄 Checking dataset_info.txt:")
-        with open(info_path) as f:
-            info_lines = f.readlines()
-        info_dict = dict(line.strip().split(": ", 1) for line in info_lines if ": " in line)
+    except Exception as e:
+        logger.error(f"❌ Error reading {f}: {e}")
 
-        if "num_samples" in info_dict:
-            declared_samples = int(info_dict["num_samples"])
-            if declared_samples != len(files):
-                print(f"❌ Mismatch in sample count: info={declared_samples} vs found={len(files)}")
+logger.info(f"✅ Validation complete: {len(files) - len(bad_files)} OK, {len(bad_files)} with issues")
+
+# === Normalization stats ===
+if norm_file and os.path.exists(norm_file):
+    logger.info(f"📦 Validating normalization file: {norm_file}")
+    with open(norm_file) as f:
+        norm_stats = yaml.safe_load(f)
+
+    for section in ["input", "target"]:
+        if section not in norm_stats:
+            logger.error(f"❌ Missing '{section}' section in normalization file")
+            continue
+
+        for k, v in norm_stats[section].items():
+            mean = v.get("mean")
+            std = v.get("std")
+            if std is None or std == 0:
+                logger.error(f"❌ Invalid std for {section}:{k} → {std}")
             else:
-                print("✅ Sample count matches dataset_info.txt")
-
-        if "input_shape" in info_dict:
-            if str(next(iter(unique_input_shapes))) != info_dict["input_shape"]:
-                print(f"❌ Mismatch in input_shape: info={info_dict['input_shape']} vs actual={unique_input_shapes}")
-            else:
-                print("✅ input_shape matches dataset_info.txt")
-
-        if "target_shape" in info_dict:
-            if str(next(iter(unique_target_shapes))) != info_dict["target_shape"]:
-                print(f"❌ Mismatch in target_shape: info={info_dict['target_shape']} vs actual={unique_target_shapes}")
-            else:
-                print("✅ target_shape matches dataset_info.txt")
-
-    else:
-        print("⚠️  dataset_info.txt not found for comparison")
-
-def validate_normalization_file(norm_path):
-    if not os.path.exists(norm_path):
-        print("⚠️  Normalization file not found.")
-        return
-
-    with open(norm_path) as f:
-        stats = yaml.safe_load(f)
-
-    print("\n📊 Normalization Statistics:")
-    for section in stats:
-        mean = stats[section].get("mean")
-        std = stats[section].get("std")
-        print(f"  {section}: mean={mean}, std={std}")
-
-    if any(std == 0 for section in stats for std in [stats[section].get("std")]):
-        print("❌ Invalid std=0 in normalization file!")
-    else:
-        print("✅ Normalization stats look valid")
-
-if __name__ == "__main__":
-    data_dir, norm_file = load_config()
-    validate_npz_files(data_dir)
-    validate_normalization_file(norm_file)
+                logger.info(f"✅ {section}:{k} → mean={mean:.2f}, std={std:.2f}")
+else:
+    logger.warning("⚠️  Normalization file not found or not specified")
